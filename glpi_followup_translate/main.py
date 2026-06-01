@@ -218,8 +218,13 @@ def extract_original_text(content: str, prefix: str) -> str:
 
 
 def build_translated_content(original: str, translated: str, prefix: str) -> str:
-    """Build content preserving original and adding translation."""
+    """Build content preserving original and adding translation (for description/followup)."""
     return f"{original}\n\n{prefix}\n{translated}"
+
+
+def build_translated_title(original: str, translated: str) -> str:
+    """Build title preserving original and adding translation (slash-separated)."""
+    return f"{original} / {translated}"
 
 
 def process_text(
@@ -244,7 +249,7 @@ def process_text(
     # Strip HTML tags for language detection and length check
     plain_text = strip_html(text)
 
-    if not plain_text or len(plain_text) < config.translation.min_text_length:
+    if not plain_text or (config.translation.min_text_length > 0 and len(plain_text) < config.translation.min_text_length):
         return None
 
     # Skip if already translated
@@ -360,8 +365,9 @@ def process_ticket(
     translated_name = None
     translated_content = None
 
-    # Translate name if needed (skip if already translated)
-    if name and not is_already_translated(name, config.translation.prefix):
+    # Translate name if needed (skip if already translated with old or new format)
+    name_already_translated = is_already_translated(name, config.translation.prefix) or " / " in name
+    if name and not name_already_translated:
         translated_name = process_text(name, ticket_id, "ticket_name", config, ollama)
 
     # Translate content if needed (skip if already translated)
@@ -376,9 +382,7 @@ def process_ticket(
     # Build update fields
     update_fields = {}
     if translated_name:
-        update_fields["name"] = build_translated_content(
-            name, translated_name, config.translation.prefix
-        )
+        update_fields["name"] = build_translated_title(name, translated_name)
     if translated_content:
         update_fields["content"] = build_translated_content(
             content, translated_content, config.translation.prefix
