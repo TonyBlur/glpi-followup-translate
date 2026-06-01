@@ -4,6 +4,11 @@ import sys
 import os
 import logging
 
+# Set UTF-8 encoding for Windows console
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # Add parent directory to path so we can import the package
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,10 +21,10 @@ from glpi_followup_translate.main import (
     ProcessedState,
 )
 
-# Sample test data: mix of Chinese and English followups
+# Sample test data: mix of Chinese and English
 TEST_TICKETS = [
     {
-        "name": "网络连接问题 / Network Connection Issue",
+        "name": "网络连接问题",
         "content": "用户报告办公室网络不稳定，经常断开连接。已尝试重启路由器但问题仍然存在。",
         "followups": [
             "已派遣技术人员前往现场检查，预计下午3点到达。",
@@ -37,7 +42,7 @@ TEST_TICKETS = [
         ],
     },
     {
-        "name": "邮箱配置问题 / Email Configuration Issue",
+        "name": "邮箱配置问题",
         "content": "新员工无法配置公司邮箱，Outlook提示认证失败。",
         "followups": [
             "IT部门已重置该员工的邮箱密码，请通知员工使用新密码重新配置。",
@@ -73,27 +78,36 @@ def main():
     print(f"API URL: {config.glpi.api_url}")
     try:
         glpi._ensure_token()
-        if glpi.access_token:
-            print(f"OAuth2 token obtained (first 50 chars): {glpi.access_token[:50]}...")
-        elif glpi.session_token:
-            print(f"Session token obtained: {glpi.session_token[:20]}...")
+        print(f"Token obtained successfully!")
         print("GLPI authentication successful.\n")
     except Exception as e:
         print(f"ERROR: GLPI authentication failed: {e}")
-        print("\nTroubleshooting tips:")
-        print("1. Check if OAuth2 client has 'api' scope configured in GLPI")
-        print("2. Try setting auth_method to 'app_token' in config.yaml")
-        print("3. Verify your client_id and client_secret are correct")
         sys.exit(1)
+
+    # Clean up old test tickets (optional)
+    print("Cleaning up old test tickets...")
+    try:
+        existing_tickets = glpi.get_tickets()
+        for t in existing_tickets:
+            tid = t.get("id")
+            if tid:
+                try:
+                    glpi.update_ticket(tid, is_deleted=True)
+                    print(f"  Deleted ticket #{tid}")
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"  Warning: Could not clean up: {e}")
 
     # Create test tickets
     created_tickets = []
-    print("Creating test tickets...")
+    print("\nCreating test tickets...")
     for i, ticket_data in enumerate(TEST_TICKETS, 1):
         try:
             result = glpi.create_ticket(
                 name=ticket_data["name"],
                 content=ticket_data["content"],
+                type=1,  # Incident
             )
             ticket_id = result.get("id")
             print(f"  [{i}/{len(TEST_TICKETS)}] Created ticket #{ticket_id}: {ticket_data['name']}")
@@ -119,10 +133,11 @@ def main():
     print("\nRunning translation pass...\n")
     stats = run_once(config, glpi, ollama, state)
     print(f"\nTranslation complete:")
-    print(f"  Tickets checked: {stats['tickets_checked']}")
-    print(f"  Translated:      {stats['translated']}")
-    print(f"  Skipped:         {stats['skipped']}")
-    print(f"  Failed:          {stats['failed']}")
+    print(f"  Tickets checked:      {stats['tickets_checked']}")
+    print(f"  Tickets translated:   {stats['tickets_translated']}")
+    print(f"  Followups translated: {stats['followups_translated']}")
+    print(f"  Skipped:              {stats['tickets_skipped'] + stats['followups_skipped']}")
+    print(f"  Failed:               {stats['failed']}")
 
     # Show results
     print("\n" + "=" * 60)
@@ -130,15 +145,20 @@ def main():
     print("=" * 60)
     for ticket_id in created_tickets:
         try:
+            ticket = glpi.get_ticket(ticket_id)
+            print(f"\n{'='*60}")
+            print(f"Ticket #{ticket_id}:")
+            print(f"  Name: {ticket.get('name', '')}")
+            print(f"  Content: {ticket.get('content', '')[:200]}...")
+
             followups = glpi.get_ticket_followups(ticket_id)
-            print(f"\nTicket #{ticket_id}:")
             for fu in followups:
                 content = fu.get("content", "")
-                print(f"  Followup #{fu.get('id')}:")
+                print(f"\n  Followup #{fu.get('id')}:")
                 for line in content.split("\n"):
                     print(f"    {line}")
         except Exception as e:
-            print(f"  Error fetching followups for ticket #{ticket_id}: {e}")
+            print(f"  Error fetching ticket #{ticket_id}: {e}")
 
 
 if __name__ == "__main__":

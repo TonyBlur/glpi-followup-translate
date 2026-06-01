@@ -5,15 +5,20 @@ glpi:
   # GLPI API base URL
   api_url: "http://your-glpi-server/api.php/v2.3"
 
-  # Authentication method: "oauth2", "app_token", or "auto" (try both)
-  # - oauth2: Use OAuth2 Client Credentials (client_id/client_secret are OAuth2 credentials)
-  # - app_token: Use GLPI App-Token + User-Token (client_id = App-Token, client_secret = User-Token)
-  # - auto: Try OAuth2 first, fall back to App-Token
-  auth_method: "auto"
+  # Authentication method: "oauth2_password" or "app_token"
+  # - oauth2_password: OAuth2 Password Flow (recommended for services/daemons)
+  # - app_token: GLPI App-Token + User-Token (standard GLPI API auth)
+  auth_method: "oauth2_password"
 
-  # Credentials (OAuth2 Client ID + Client Secret, OR App-Token + User-Token)
+  # OAuth2 credentials (Client ID + Client Secret from GLPI OAuth2 settings)
   client_id: "your_client_id_here"
   client_secret: "your_client_secret_here"
+
+  # GLPI user credentials (required for oauth2_password flow)
+  # Username: the GLPI login username
+  # Password: the GLPI login password
+  username: "your_glpi_username"
+  password: "your_glpi_password"
 
 ollama:
   # Ollama API base URL

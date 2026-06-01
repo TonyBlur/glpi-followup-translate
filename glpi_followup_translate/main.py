@@ -53,46 +53,71 @@ def setup_logging(config: AppConfig) -> None:
 
 
 class ProcessedState:
-    """Track which followups have been processed to avoid re-translation."""
+    """Track which items have been processed to avoid re-translation."""
 
-    def __init__(self, state_file: str = "processed_followups.json"):
+    def __init__(self, state_file: str = "processed_state.json"):
         self.state_file = state_file
-        self.processed: Set[int] = set()
+        self.processed_followups: Set[int] = set()
+        self.processed_tickets: Set[int] = set()
         self._load()
 
     def _load(self) -> None:
-        """Load processed followup IDs from file."""
+        """Load processed IDs from file."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r") as f:
                     data = json.load(f)
-                    self.processed = set(data.get("processed_ids", []))
-                logger.info("Loaded %d processed followup IDs", len(self.processed))
+                    self.processed_followups = set(data.get("followups", []))
+                    self.processed_tickets = set(data.get("tickets", []))
+                logger.info(
+                    "Loaded state: %d followups, %d tickets",
+                    len(self.processed_followups),
+                    len(self.processed_tickets),
+                )
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning("Failed to load state file, starting fresh: %s", e)
-                self.processed = set()
 
     def save(self) -> None:
-        """Save processed followup IDs to file."""
+        """Save processed IDs to file."""
         try:
             with open(self.state_file, "w") as f:
-                json.dump({"processed_ids": list(self.processed)}, f)
+                json.dump(
+                    {
+                        "followups": list(self.processed_followups),
+                        "tickets": list(self.processed_tickets),
+                    },
+                    f,
+                )
         except IOError as e:
             logger.error("Failed to save state file: %s", e)
 
-    def is_processed(self, followup_id: int) -> bool:
-        return followup_id in self.processed
+    def is_followup_processed(self, followup_id: int) -> bool:
+        return followup_id in self.processed_followups
 
-    def mark_processed(self, followup_id: int) -> None:
-        self.processed.add(followup_id)
+    def mark_followup_processed(self, followup_id: int) -> None:
+        self.processed_followups.add(followup_id)
 
-    def cleanup(self, valid_ids: Set[int]) -> None:
-        """Remove IDs that no longer exist in GLPI."""
-        before = len(self.processed)
-        self.processed &= valid_ids
-        removed = before - len(self.processed)
+    def is_ticket_processed(self, ticket_id: int) -> bool:
+        return ticket_id in self.processed_tickets
+
+    def mark_ticket_processed(self, ticket_id: int) -> None:
+        self.processed_tickets.add(ticket_id)
+
+    def cleanup_followups(self, valid_ids: Set[int]) -> None:
+        """Remove followup IDs that no longer exist."""
+        before = len(self.processed_followups)
+        self.processed_followups &= valid_ids
+        removed = before - len(self.processed_followups)
         if removed:
-            logger.info("Cleaned up %d stale state entries", removed)
+            logger.info("Cleaned up %d stale followup entries", removed)
+
+    def cleanup_tickets(self, valid_ids: Set[int]) -> None:
+        """Remove ticket IDs that no longer exist."""
+        before = len(self.processed_tickets)
+        self.processed_tickets &= valid_ids
+        removed = before - len(self.processed_tickets)
+        if removed:
+            logger.info("Cleaned up %d stale ticket entries", removed)
 
 
 def detect_language(text: str) -> str:
@@ -106,71 +131,97 @@ def detect_language(text: str) -> str:
     """
     try:
         lang = detect(text)
-        # langdetect returns 'zh-cn', 'zh-tw', 'en', etc.
         return lang.lower()
     except LangDetectException:
         return "unknown"
 
 
 def is_already_translated(content: str, prefix: str) -> bool:
-    """Check if followup content already contains a translation.
-
-    Args:
-        content: Followup content
-        prefix: Translation prefix marker
-
-    Returns:
-        True if content already has translation marker
-    """
+    """Check if content already contains a translation."""
     return prefix in content
 
 
 def extract_original_text(content: str, prefix: str) -> str:
-    """Extract the original text from a followup that may already have translation.
-
-    Args:
-        content: Full followup content
-        prefix: Translation prefix marker
-
-    Returns:
-        The original (non-translated) portion of the text
-    """
+    """Extract the original text from content that may already have translation."""
     if prefix in content:
-        # Split on the first occurrence of prefix and take the part before it
         parts = content.split(prefix, 1)
         return parts[0].strip()
     return content.strip()
 
 
 def build_translated_content(original: str, translated: str, prefix: str) -> str:
-    """Build followup content preserving original and adding translation.
+    """Build content preserving original and adding translation."""
+    return f"{original}\n\n{prefix}\n{translated}"
+
+
+def process_text(
+    text: str,
+    item_id: int,
+    item_type: str,
+    config: AppConfig,
+    ollama: OllamaClient,
+) -> str | None:
+    """Process a text for translation.
 
     Args:
-        original: Original followup text
-        translated: Translated text
-        prefix: Translation prefix marker
+        text: Text to potentially translate
+        item_id: ID of the item (for logging)
+        item_type: Type of item ("followup" or "ticket")
+        config: Application configuration
+        ollama: Ollama API client
 
     Returns:
-        Combined content with original preserved and translation appended
+        Translated text if translation was needed, None otherwise
     """
-    return f"{original}\n\n{prefix}\n{translated}"
+    if not text or len(text.strip()) < config.translation.min_text_length:
+        return None
+
+    # Skip if already translated
+    if is_already_translated(text, config.translation.prefix):
+        return None
+
+    # Detect language
+    source_lang = detect_language(text)
+    logger.debug("%s %d detected language: %s", item_type, item_id, source_lang)
+
+    # Check if it's a language we should translate
+    target_lang = config.translation.target_language.get(source_lang)
+    if not target_lang:
+        logger.debug(
+            "%s %d: language '%s' not in translation pairs, skipping",
+            item_type,
+            item_id,
+            source_lang,
+        )
+        return None
+
+    # Translate
+    logger.info(
+        "Translating %s %d (%s -> %s): %s...",
+        item_type,
+        item_id,
+        source_lang,
+        target_lang,
+        text[:80],
+    )
+
+    translated = ollama.translate(text, source_lang, target_lang)
+    if not translated:
+        logger.warning("Translation failed for %s %d", item_type, item_id)
+        return None
+
+    return translated
 
 
 def process_followup(
     followup: dict,
+    ticket_id: int,
     config: AppConfig,
     glpi: GlpiClient,
     ollama: OllamaClient,
     state: ProcessedState,
 ) -> bool:
     """Process a single followup for translation.
-
-    Args:
-        followup: Followup dictionary from GLPI API
-        config: Application configuration
-        glpi: GLPI API client
-        ollama: Ollama API client
-        state: Processed state tracker
 
     Returns:
         True if translation was performed
@@ -182,62 +233,89 @@ def process_followup(
         return False
 
     # Skip if already processed
-    if state.is_processed(followup_id):
+    if state.is_followup_processed(followup_id):
         return False
 
-    # Skip if already translated
-    if is_already_translated(content, config.translation.prefix):
-        state.mark_processed(followup_id)
-        return False
-
-    # Skip if too short
-    if len(content) < config.translation.min_text_length:
-        state.mark_processed(followup_id)
-        return False
-
-    # Detect language
-    source_lang = detect_language(content)
-    logger.debug("Followup %d detected language: %s", followup_id, source_lang)
-
-    # Check if it's a language we should translate
-    target_lang = config.translation.target_language.get(source_lang)
-    if not target_lang:
-        logger.debug(
-            "Followup %d: language '%s' not in translation pairs, skipping",
-            followup_id,
-            source_lang,
-        )
-        state.mark_processed(followup_id)
-        return False
-
-    # Translate
-    logger.info(
-        "Translating followup %d (%s -> %s): %s...",
-        followup_id,
-        source_lang,
-        target_lang,
-        content[:80],
-    )
-
-    translated = ollama.translate(content, source_lang, target_lang)
+    # Process translation
+    translated = process_text(content, followup_id, "followup", config, ollama)
     if not translated:
-        logger.warning("Translation failed for followup %d", followup_id)
+        state.mark_followup_processed(followup_id)
         return False
 
     # Build new content preserving original
-    new_content = build_translated_content(
-        content, translated, config.translation.prefix
-    )
+    new_content = build_translated_content(content, translated, config.translation.prefix)
 
     # Update followup in GLPI
     try:
-        glpi.update_followup(followup_id, new_content)
+        glpi.update_followup(ticket_id, followup_id, new_content)
         logger.info("Followup %d translated and updated successfully", followup_id)
-        state.mark_processed(followup_id)
+        state.mark_followup_processed(followup_id)
         state.save()
         return True
     except Exception as e:
         logger.error("Failed to update followup %d: %s", followup_id, e)
+        return False
+
+
+def process_ticket(
+    ticket: dict,
+    config: AppConfig,
+    glpi: GlpiClient,
+    ollama: OllamaClient,
+    state: ProcessedState,
+) -> bool:
+    """Process a ticket's name and content for translation.
+
+    Returns:
+        True if any translation was performed
+    """
+    ticket_id = ticket.get("id")
+    if not ticket_id:
+        return False
+
+    # Skip if already processed
+    if state.is_ticket_processed(ticket_id):
+        return False
+
+    name = ticket.get("name", "").strip()
+    content = ticket.get("content", "").strip()
+
+    translated_name = None
+    translated_content = None
+
+    # Translate name if needed
+    if name:
+        translated_name = process_text(name, ticket_id, "ticket_name", config, ollama)
+
+    # Translate content if needed
+    if content:
+        translated_content = process_text(content, ticket_id, "ticket_content", config, ollama)
+
+    # If nothing to translate, mark as processed
+    if not translated_name and not translated_content:
+        state.mark_ticket_processed(ticket_id)
+        return False
+
+    # Build update fields
+    update_fields = {}
+    if translated_name:
+        update_fields["name"] = build_translated_content(
+            name, translated_name, config.translation.prefix
+        )
+    if translated_content:
+        update_fields["content"] = build_translated_content(
+            content, translated_content, config.translation.prefix
+        )
+
+    # Update ticket in GLPI
+    try:
+        glpi.update_ticket(ticket_id, **update_fields)
+        logger.info("Ticket %d translated and updated successfully", ticket_id)
+        state.mark_ticket_processed(ticket_id)
+        state.save()
+        return True
+    except Exception as e:
+        logger.error("Failed to update ticket %d: %s", ticket_id, e)
         return False
 
 
@@ -247,9 +325,16 @@ def run_once(
     """Run one translation pass over all tickets.
 
     Returns:
-        Stats dict with counts of translated, skipped, failed followups
+        Stats dict with counts of translated, skipped, failed items
     """
-    stats = {"translated": 0, "skipped": 0, "failed": 0, "tickets_checked": 0}
+    stats = {
+        "tickets_translated": 0,
+        "tickets_skipped": 0,
+        "followups_translated": 0,
+        "followups_skipped": 0,
+        "failed": 0,
+        "tickets_checked": 0,
+    }
 
     try:
         tickets = glpi.get_tickets()
@@ -258,13 +343,21 @@ def run_once(
         return stats
 
     stats["tickets_checked"] = len(tickets)
-    logger.info("Checking %d tickets for followups to translate...", len(tickets))
+    logger.info("Checking %d tickets...", len(tickets))
 
     for ticket in tickets:
         ticket_id = ticket.get("id")
         if not ticket_id:
             continue
 
+        # Process ticket name and content
+        ticket_result = process_ticket(ticket, config, glpi, ollama, state)
+        if ticket_result:
+            stats["tickets_translated"] += 1
+        elif not state.is_ticket_processed(ticket_id):
+            stats["tickets_skipped"] += 1
+
+        # Process followups
         try:
             followups = glpi.get_ticket_followups(ticket_id)
         except Exception as e:
@@ -272,29 +365,34 @@ def run_once(
             continue
 
         for followup in followups:
-            result = process_followup(followup, config, glpi, ollama, state)
+            result = process_followup(followup, ticket_id, config, glpi, ollama, state)
             if result:
-                stats["translated"] += 1
-            elif not state.is_processed(followup.get("id", 0)):
-                stats["skipped"] += 1
+                stats["followups_translated"] += 1
+            elif not state.is_followup_processed(followup.get("id", 0)):
+                stats["followups_skipped"] += 1
 
-    # Periodic cleanup of state (keep only existing followup IDs)
-    all_ids: Set[int] = set()
+    # Periodic cleanup
+    all_followup_ids: Set[int] = set()
+    all_ticket_ids: Set[int] = set()
     for ticket in tickets:
-        try:
-            for fu in glpi.get_ticket_followups(ticket.get("id", 0)):
-                if fu.get("id"):
-                    all_ids.add(fu["id"])
-        except Exception:
-            pass
-    state.cleanup(all_ids)
+        ticket_id = ticket.get("id")
+        if ticket_id:
+            all_ticket_ids.add(ticket_id)
+            try:
+                for fu in glpi.get_ticket_followups(ticket_id):
+                    if fu.get("id"):
+                        all_followup_ids.add(fu["id"])
+            except Exception:
+                pass
+    state.cleanup_followups(all_followup_ids)
+    state.cleanup_tickets(all_ticket_ids)
     state.save()
 
     return stats
 
 
 def daemon_loop(config: AppConfig) -> None:
-    """Main daemon loop - polls for new followups periodically."""
+    """Main daemon loop - polls for new items periodically."""
     global _shutdown
 
     glpi = GlpiClient(config.glpi)
@@ -318,10 +416,12 @@ def daemon_loop(config: AppConfig) -> None:
         try:
             stats = run_once(config, glpi, ollama, state)
             logger.info(
-                "Pass complete: %d tickets checked, %d translated, %d skipped, %d failed",
+                "Pass complete: %d tickets checked | Tickets: %d translated, %d skipped | Followups: %d translated, %d skipped | %d failed",
                 stats["tickets_checked"],
-                stats["translated"],
-                stats["skipped"],
+                stats["tickets_translated"],
+                stats["tickets_skipped"],
+                stats["followups_translated"],
+                stats["followups_skipped"],
                 stats["failed"],
             )
         except Exception as e:
@@ -368,7 +468,11 @@ def main():
         ollama = OllamaClient(config.ollama)
         state = ProcessedState()
         stats = run_once(config, glpi, ollama, state)
-        logger.info("Single pass: %d translated, %d skipped", stats["translated"], stats["skipped"])
+        logger.info(
+            "Single pass: %d tickets translated, %d followups translated",
+            stats["tickets_translated"],
+            stats["followups_translated"],
+        )
     else:
         daemon_loop(config)
 
