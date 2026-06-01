@@ -1,160 +1,198 @@
 # GLPI Followup Translate
 
-自动翻译 GLPI 工单跟进记录（Followup）的工具。使用本地 Ollama LLM 实现中文 ↔ 英文自动翻译。
+Auto-translate GLPI tickets using a local [Ollama](https://ollama.ai/) LLM.
+Detects Chinese or English content and translates bidirectionally (zh ↔ en).
+Works with ticket **names**, **descriptions**, and **followups**.
 
-## 功能特性
+> 📖 [中文文档](README.zh-CN.md)
 
-- 🔄 **自动轮询**：定时检查 GLPI 工单的新跟进记录
-- 🌐 **语言检测**：自动识别中文/英文内容
-- 🔀 **双向翻译**：中文 → 英文，英文 → 中文
-- 📝 **保留原文**：翻译结果追加到原文下方，不覆盖原始内容
-- 🚫 **去重处理**：已翻译的跟进记录不会重复处理
-- ⚙️ **灵活配置**：轮询间隔、翻译参数等均可自定义
+## Features
 
-## 前置要求
+- 🔄 **Daemon or one-shot** — polling loop or single-pass mode
+- 🌐 **Language detection** — auto-detects Chinese and English
+- 🔀 **Bidirectional** — zh-cn → en, en → zh-cn
+- 📝 **Preserves original** — translation is appended, never overwritten
+- 🎨 **Rich-text aware** — HTML formatting (`<strong>`, `<em>`, `<span style="...">`, colors, font sizes) is preserved in translations
+- 🚫 **Dedup** — content-hash state tracking prevents duplicate translations
+- ⚙️ **Configurable** — polling interval, model, language pairs, min text length
+- 💻 **Cross-platform** — Windows, Linux, macOS
+
+## Translation Format
+
+| Field | Format |
+|-------|--------|
+| **Title** | `原始标题 / Translated title` |
+| **Description** (rich text) | `<p>原始内容</p><br><br><p><strong>[AUTO-TRANSLATED]</strong></p><p>翻译内容</p>` |
+| **Description** (plain text) | `原始内容\n\n[AUTO-TRANSLATED]\n翻译内容` |
+| **Followup** | Same as description — rich text or plain text depending on content |
+
+### Example — Title
+
+```
+服务器无法连接数据库 / The server cannot connect to the database
+```
+
+### Example — Rich-Text Description
+
+```html
+<p><strong>生产环境</strong>服务器无法连接到
+<span style="color: rgb(255, 0, 0);">MySQL数据库</span>。</p>
+<br><br>
+<p><strong>[AUTO-TRANSLATED]</strong></p>
+<p><strong>Production environment</strong> server cannot connect to the
+<span style="color: rgb(255, 0, 0);">MySQL database</span>.</p>
+```
+
+### Example — Plain-Text Followup
+
+```
+检查了防火墙规则，发现3306端口被意外关闭。
+
+[AUTO-TRANSLATED]
+Checked the firewall rules and found that port 3306 was accidentally closed.
+```
+
+## Requirements
 
 - Python 3.9+
-- [Ollama](https://ollama.ai/) 已安装并运行
-- GLPI 实例已启用 API v2.3 和 OAuth2 认证
+- [Ollama](https://ollama.ai/) installed and running
+- GLPI instance with API v2.3 and OAuth2 enabled
 
-## 安装
-
-### 1. 克隆仓库
+## Quick Start
 
 ```bash
-git clone <your-repo-url>
+# 1. Clone
+git clone https://github.com/TonyBlur/glpi-followup-translate.git
 cd glpi-followup-translate
-```
 
-### 2. 创建虚拟环境
-
-```bash
+# 2. Virtual environment
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# Linux/macOS
-source .venv/bin/activate
-```
+source .venv/bin/activate      # Linux/macOS
+.venv\Scripts\activate         # Windows
 
-### 3. 安装依赖
-
-```bash
+# 3. Install dependencies
 pip install -r requirements.txt
-```
 
-### 4. 拉取 Ollama 模型
-
-```bash
+# 4. Pull the translation model
 ollama pull kaelri/hy-mt2:1.8b
-```
 
-### 5. 配置
-
-```bash
+# 5. Configure
 cp config.yaml.example config.yaml
+# Edit config.yaml with your GLPI credentials
+
+# 6. Run (daemon mode)
+python -m glpi_followup_translate
+
+# Or run once and exit
+python -m glpi_followup_translate --once
 ```
 
-编辑 `config.yaml`，填入你的 GLPI API 凭证：
+## Configuration
+
+Copy `config.yaml.example` to `config.yaml` and edit:
 
 ```yaml
 glpi:
   api_url: "http://your-glpi-server/api.php/v2.3"
+  auth_method: "oauth2_password"
   client_id: "your_client_id"
   client_secret: "your_client_secret"
+  username: "your_glpi_username"
+  password: "your_glpi_password"
+
+ollama:
+  api_url: "http://localhost:11434"
+  model: "kaelri/hy-mt2:1.8b"
+  timeout: 60
+
+polling:
+  interval: 60          # seconds between checks
+
+translation:
+  prefix: "[AUTO-TRANSLATED]"
+  min_text_length: 0    # 0 = translate any length
+  source_languages:
+    - "zh-cn"
+    - "zh"
+    - "en"
+  target_language:
+    zh-cn: "en"
+    zh: "en"
+    en: "zh-cn"
+
+logging:
+  level: "INFO"
+  file: "glpi-translate.log"
 ```
 
-## 使用方法
+| Option | Description | Default |
+|--------|-------------|---------|
+| `glpi.api_url` | GLPI API endpoint | — |
+| `glpi.auth_method` | `oauth2_password` or `app_token` | `oauth2_password` |
+| `ollama.api_url` | Ollama API URL | `http://localhost:11434` |
+| `ollama.model` | Translation model | `kaelri/hy-mt2:1.8b` |
+| `ollama.timeout` | Request timeout (seconds) | `60` |
+| `polling.interval` | Polling interval (seconds) | `60` |
+| `translation.prefix` | Translation separator marker | `[AUTO-TRANSLATED]` |
+| `translation.min_text_length` | Min plain-text length to translate | `0` |
+| `logging.level` | Log level | `INFO` |
 
-### 常驻轮询模式（默认）
+## Testing
+
+### Single ticket test
 
 ```bash
-python -m glpi_followup_translate
+python test_single_ticket.py
 ```
 
-程序将持续运行，每隔配置的间隔时间检查一次新的跟进记录。
+Creates one test ticket with rich-text (HTML) content and mixed Chinese/English
+followups, then runs one translation pass and verifies the format.
 
-### 单次执行模式
+The script will:
+1. Check Ollama connectivity
+2. Test GLPI authentication
+3. Create a test ticket with HTML-formatted description
+4. Add 3 followups (plain text and HTML)
+5. Run one translation pass
+6. Display translated results
+7. Verify format correctness (title: `/` separator, HTML: `<br>` separators, plain: `\n\n` separators)
 
-```bash
-python -m glpi_followup_translate --once
-```
-
-执行一次翻译检查后退出。
-
-### 指定配置文件
-
-```bash
-python -m glpi_followup_translate -c /path/to/config.yaml
-```
-
-### 停止程序
-
-按 `Ctrl+C` 或发送 `SIGTERM` 信号，程序会优雅退出。
-
-## 配置说明
-
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `glpi.api_url` | GLPI API 地址 | `http://your-glpi-server/api.php/v2.3` |
-| `glpi.client_id` | OAuth2 Client ID | - |
-| `glpi.client_secret` | OAuth2 Client Secret | - |
-| `ollama.api_url` | Ollama API 地址 | `http://localhost:11434` |
-| `ollama.model` | 翻译模型名称 | `kaelri/hy-mt2:1.8b` |
-| `ollama.timeout` | 翻译请求超时（秒） | `60` |
-| `polling.interval` | 轮询间隔（秒） | `60` |
-| `translation.prefix` | 翻译标记前缀 | `[AUTO-TRANSLATED]` |
-| `translation.min_text_length` | 最小翻译文本长度 | `10` |
-| `logging.level` | 日志级别 | `INFO` |
-| `logging.file` | 日志文件路径 | `glpi-translate.log` |
-
-## 翻译效果示例
-
-**原始跟进记录：**
-```
-用户报告无法登录系统，提示"密码错误"。
-```
-
-**翻译后的跟进记录：**
-```
-用户报告无法登录系统，提示"密码错误"。
-
-[AUTO-TRANSLATED]
-User reports being unable to log into the system, with an "incorrect password" error message.
-```
-
-## 项目结构
-
-```
-glpi-followup-translate/
-├── glpi_followup_translate/
-│   ├── __init__.py        # 包初始化
-│   ├── __main__.py        # 入口点
-│   ├── config.py          # 配置加载
-│   ├── glpi_client.py     # GLPI API 客户端
-│   ├── main.py            # 主程序逻辑
-│   └── ollama_client.py   # Ollama API 客户端
-├── config.yaml.example    # 配置模板
-├── config.yaml            # 实际配置（已 gitignore）
-├── requirements.txt       # Python 依赖
-├── .gitignore
-├── CLAUDE.md              # 项目开发文档
-└── README.md              # 本文件
-```
-
-## 测试
-
-运行测试脚本创建示例工单并自动翻译：
+### Multi-ticket test
 
 ```bash
 python test_translate.py
 ```
 
-这会：
-1. 检查 Ollama 连接
-2. 测试 GLPI 认证
-3. 创建 3 个测试工单（中英文混合）
-4. 运行一次翻译
-5. 显示翻译结果
+Creates 3 test tickets with bilingual followups to verify end-to-end translation.
+This script cleans up old test tickets first, then:
+
+1. Check Ollama and GLPI connectivity
+2. Delete existing test tickets
+3. Create 3 tickets with Chinese/English content
+4. Add bilingual followups to each ticket
+5. Run one translation pass with debug logging
+6. Display all translated results
+
+## Project Structure
+
+```
+glpi-followup-translate/
+├── glpi_followup_translate/
+│   ├── __init__.py
+│   ├── __main__.py         # entry point
+│   ├── config.py           # YAML config loader
+│   ├── glpi_client.py      # GLPI REST API v2.3 client
+│   ├── main.py             # daemon loop, translation logic
+│   └── ollama_client.py    # Ollama API client
+├── config.yaml.example     # config template (safe to commit)
+├── config.yaml             # actual config (gitignored)
+├── requirements.txt
+├── test_single_ticket.py   # quick single-ticket test
+├── test_translate.py       # multi-ticket test suite
+├── README.md
+├── README.zh-CN.md
+└── CLAUDE.md
+```
 
 ## License
 
