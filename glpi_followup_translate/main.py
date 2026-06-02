@@ -291,6 +291,24 @@ def detect_language(text: str) -> str:
         return "unknown"
 
 
+def detect_language_with_fallback(text: str, supported: set) -> str:
+    """Detect language with fallback for short ASCII texts.
+
+    langdetect can misidentify short English texts (e.g. "Yes, sure" → fr).
+    If the primary detection returns an unsupported language, fall back to
+    'en' for short ASCII-only texts.
+    """
+    lang = detect_language(text)
+    if lang in supported:
+        return lang
+
+    # If text is short and ASCII-only, it's likely English misidentified
+    if len(text) < 50 and all(ord(c) < 128 for c in text):
+        return "en"
+
+    return lang
+
+
 def is_already_translated(content: str, prefix: str) -> bool:
     """Check if content already contains a translation."""
     return prefix in content
@@ -386,8 +404,10 @@ def process_text(
     if is_already_translated(text, config.translation.prefix):
         return None
 
-    # Detect language using plain text (no HTML)
-    source_lang = detect_language(plain_text)
+    # Detect language using plain text (no HTML), with fallback for short ASCII
+    source_lang = detect_language_with_fallback(
+        plain_text, set(config.translation.source_languages)
+    )
     logger.debug("%s %d detected language: %s", item_type, item_id, source_lang)
 
     # Check if it's a language we should translate
