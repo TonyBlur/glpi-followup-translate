@@ -87,8 +87,8 @@ class ProcessedState:
         self.processed_tasks: dict[int, str] = {}
         # Maps solution_id -> content hash
         self.processed_solutions: dict[int, str] = {}
-        # Maps validation_id -> content hash
-        self.processed_validations: dict[int, str] = {}
+        # Maps validation_id -> (submission_hash, approval_hash)
+        self.processed_validations: dict[int, tuple[str, str]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -128,7 +128,11 @@ class ProcessedState:
                         int(k): str(v) for k, v in data.get("solutions", {}).items()
                     }
                     self.processed_validations = {
-                        int(k): str(v) for k, v in data.get("validations", {}).items()
+                        int(k): (
+                            str(v[0]) if isinstance(v, list) and len(v) == 2 else str(v),
+                            str(v[1]) if isinstance(v, list) and len(v) == 2 else "",
+                        )
+                        for k, v in data.get("validations", {}).items()
                     }
                 logger.info(
                     "Loaded state: %d followups, %d tickets, %d tasks, %d solutions, %d validations",
@@ -154,7 +158,10 @@ class ProcessedState:
                         },
                         "tasks": {str(k): v for k, v in self.processed_tasks.items()},
                         "solutions": {str(k): v for k, v in self.processed_solutions.items()},
-                        "validations": {str(k): v for k, v in self.processed_validations.items()},
+                        "validations": {
+                            str(k): [v[0], v[1]]
+                            for k, v in self.processed_validations.items()
+                        },
                     },
                     f,
                 )
@@ -214,15 +221,29 @@ class ProcessedState:
         """Mark a solution as processed with its current content."""
         self.processed_solutions[solution_id] = self._content_hash(content)
 
-    def is_validation_processed(self, validation_id: int, content: str) -> bool:
-        """Check if a validation has been processed with the same content."""
+    def is_submission_processed(self, validation_id: int, sub_comment: str) -> bool:
+        """Check if the submission_comment for a validation has been processed."""
         if validation_id not in self.processed_validations:
             return False
-        return self.processed_validations[validation_id] == self._content_hash(content)
+        old_hash = self.processed_validations[validation_id][0]
+        return old_hash == self._content_hash(sub_comment)
 
-    def mark_validation_processed(self, validation_id: int, content: str) -> None:
-        """Mark a validation as processed with its current content."""
-        self.processed_validations[validation_id] = self._content_hash(content)
+    def is_approval_processed(self, validation_id: int, app_comment: str) -> bool:
+        """Check if the approval_comment for a validation has been processed."""
+        if validation_id not in self.processed_validations:
+            return False
+        old_hash = self.processed_validations[validation_id][1]
+        return old_hash == self._content_hash(app_comment) if app_comment else bool(old_hash)
+
+    def mark_submission_processed(self, validation_id: int, sub_comment: str) -> None:
+        """Mark a validation's submission_comment as processed."""
+        _, app_hash = self.processed_validations.get(validation_id, ("", ""))
+        self.processed_validations[validation_id] = (self._content_hash(sub_comment), app_hash)
+
+    def mark_approval_processed(self, validation_id: int, app_comment: str) -> None:
+        """Mark a validation's approval_comment as processed."""
+        sub_hash, _ = self.processed_validations.get(validation_id, ("", ""))
+        self.processed_validations[validation_id] = (sub_hash, self._content_hash(app_comment))
 
     def cleanup_followups(self, valid_ids: Set[int]) -> None:
         """Remove followup IDs that no longer exist."""
@@ -589,25 +610,31 @@ def process_validation(
 
     sub_comment = (validation.get("submission_comment") or "").strip()
     app_comment = (validation.get("approval_comment") or "").strip()
-    combined = f"{sub_comment}\n{app_comment}"
 
-    if state.is_validation_processed(validation_id, combined):
-        return False
-
+    # Check each comment independently to avoid re-translation when only
+    # one changes (e.g. approval added after submission was translated)
     translated_sub = None
     translated_app = None
 
-    if sub_comment and not is_already_translated(sub_comment, config.translation.prefix):
+    if (sub_comment and not is_already_translated(sub_comment, config.translation.prefix)
+            and not state.is_submission_processed(validation_id, sub_comment)):
         translated_sub = process_text(sub_comment, validation_id, "validation_request", config, ollama)
 
-    if app_comment and not is_already_translated(app_comment, config.translation.prefix):
+    if (app_comment and not is_already_translated(app_comment, config.translation.prefix)
+            and not state.is_approval_processed(validation_id, app_comment)):
         translated_app = process_text(app_comment, validation_id, "validation_answer", config, ollama)
 
     if not translated_sub and not translated_app:
-        state.mark_validation_processed(validation_id, combined)
+        # Still mark current state to avoid re-checking unchanged items
+        if sub_comment:
+            state.mark_submission_processed(validation_id, sub_comment)
+        if app_comment:
+            state.mark_approval_processed(validation_id, app_comment)
+        state.save()
         return False
 
     # Build and post separate followups for request and answer
+    posted = False
     if translated_sub:
         sub_content = build_translated_content(
             sub_comment, translated_sub, config.translation.prefix
@@ -615,6 +642,8 @@ def process_validation(
         try:
             glpi.create_followup(ticket_id, sub_content)
             logger.info("Validation %d approval request translation posted", validation_id)
+            state.mark_submission_processed(validation_id, sub_comment)
+            posted = True
         except Exception as e:
             logger.error("Failed to post validation request translation: %s", e)
 
@@ -625,11 +654,12 @@ def process_validation(
         try:
             glpi.create_followup(ticket_id, app_content)
             logger.info("Validation %d approval answer translation posted", validation_id)
+            state.mark_approval_processed(validation_id, app_comment)
+            posted = True
         except Exception as e:
             logger.error("Failed to post validation answer translation: %s", e)
 
-    if translated_sub or translated_app:
-        state.mark_validation_processed(validation_id, combined)
+    if posted:
         state.save()
         return True
 
@@ -809,9 +839,11 @@ def run_once(
             if result:
                 stats["validations_translated"] += 1
             elif validation_id:
-                sub = validation.get("submission_comment", "").strip()
-                app = validation.get("approval_comment", "").strip()
-                if state.is_validation_processed(validation_id, f"{sub}\n{app}"):
+                sub = (validation.get("submission_comment") or "").strip()
+                app = (validation.get("approval_comment") or "").strip()
+                sub_done = (not sub) or state.is_submission_processed(validation_id, sub)
+                app_done = (not app) or state.is_approval_processed(validation_id, app)
+                if sub_done and app_done:
                     stats["validations_skipped"] += 1
 
     # Periodic cleanup
