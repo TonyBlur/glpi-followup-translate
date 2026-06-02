@@ -604,8 +604,8 @@ def process_validation(
     if not validation_id:
         return False
 
-    sub_comment = validation.get("submission_comment", "").strip()
-    app_comment = validation.get("approval_comment", "").strip()
+    sub_comment = (validation.get("submission_comment") or "").strip()
+    app_comment = (validation.get("approval_comment") or "").strip()
     combined = f"{sub_comment}\n{app_comment}"
 
     if state.is_validation_processed(validation_id, combined):
