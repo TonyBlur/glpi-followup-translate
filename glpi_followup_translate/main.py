@@ -347,26 +347,9 @@ def extract_outer_tag(html: str) -> str:
 def build_translated_content(original: str, translated: str, prefix: str) -> str:
     """Build content preserving original and adding translation.
 
-    For rich text (contains HTML): uses <br> tags so line breaks render
-    correctly in GLPI's HTML editor. The translated text already has HTML
-    tags preserved by the LLM, so no extra wrapping is needed.
-
-    For plain text: uses literal \\n for cross-platform line breaks.
+    Uses literal \\n for cross-platform line breaks in all cases.
     """
-    if has_html_tags(original):
-        # Rich text: use <br> for line breaks
-        # translated text should already have HTML preserved from the LLM
-        outer_tag = extract_outer_tag(original)
-        tag = outer_tag if outer_tag else "p"
-        return (
-            f"{original}"
-            f"<br><br>"
-            f"<{tag}><strong>{prefix}</strong></{tag}>"
-            f"{translated}"
-        )
-    else:
-        # Plain text: use literal newlines
-        return f"{original}\n\n{prefix}\n{translated}"
+    return f"{original}\n\n{prefix}\n{translated}"
 
 
 def build_translated_title(original: str, translated: str) -> str:
@@ -624,29 +607,33 @@ def process_validation(
         state.mark_validation_processed(validation_id, combined)
         return False
 
-    # Build followup content with translated validation comments
-    parts = []
+    # Build and post separate followups for request and answer
     if translated_sub:
-        parts.append(
-            f"[Approval Request Translation]\n"
-            f"{build_translated_content(sub_comment, translated_sub, config.translation.prefix)}"
+        sub_content = build_translated_content(
+            sub_comment, translated_sub, config.translation.prefix
         )
-    if translated_app:
-        parts.append(
-            f"[Approval Answer Translation]\n"
-            f"{build_translated_content(app_comment, translated_app, config.translation.prefix)}"
-        )
-    followup_content = "\n\n".join(parts)
+        try:
+            glpi.create_followup(ticket_id, sub_content)
+            logger.info("Validation %d approval request translation posted", validation_id)
+        except Exception as e:
+            logger.error("Failed to post validation request translation: %s", e)
 
-    try:
-        glpi.create_followup(ticket_id, followup_content)
-        logger.info("Validation %d translation posted as followup on ticket %d", validation_id, ticket_id)
+    if translated_app:
+        app_content = build_translated_content(
+            app_comment, translated_app, config.translation.prefix
+        )
+        try:
+            glpi.create_followup(ticket_id, app_content)
+            logger.info("Validation %d approval answer translation posted", validation_id)
+        except Exception as e:
+            logger.error("Failed to post validation answer translation: %s", e)
+
+    if translated_sub or translated_app:
         state.mark_validation_processed(validation_id, combined)
         state.save()
         return True
-    except Exception as e:
-        logger.error("Failed to post validation %d translation: %s", validation_id, e)
-        return False
+
+    return False
 
 
 def process_ticket(
