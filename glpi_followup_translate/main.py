@@ -570,7 +570,12 @@ def process_validation(
 ) -> bool:
     """Process a single validation for translation.
 
-    Translates both submission_comment and approval_comment if present.
+    GLPI validation comments are read-only via the API. Instead of PATCHing
+    the validation (which silently fails), we create a followup with the
+    translated content. The original validation remains visible on the timeline.
+
+    Translates both submission_comment (approval request) and approval_comment
+    (approval answer) if present.
 
     Returns:
         True if any translation was performed
@@ -579,7 +584,6 @@ def process_validation(
     if not validation_id:
         return False
 
-    # Combine both comment fields for state tracking
     sub_comment = validation.get("submission_comment", "").strip()
     app_comment = validation.get("approval_comment", "").strip()
     combined = f"{sub_comment}\n{app_comment}"
@@ -590,38 +594,38 @@ def process_validation(
     translated_sub = None
     translated_app = None
 
-    # Translate submission_comment
     if sub_comment and not is_already_translated(sub_comment, config.translation.prefix):
-        translated_sub = process_text(sub_comment, validation_id, "validation_submission", config, ollama)
+        translated_sub = process_text(sub_comment, validation_id, "validation_request", config, ollama)
 
-    # Translate approval_comment
     if app_comment and not is_already_translated(app_comment, config.translation.prefix):
-        translated_app = process_text(app_comment, validation_id, "validation_approval", config, ollama)
+        translated_app = process_text(app_comment, validation_id, "validation_answer", config, ollama)
 
     if not translated_sub and not translated_app:
         state.mark_validation_processed(validation_id, combined)
         return False
 
-    # Build update fields
-    update_fields = {}
+    # Build followup content with translated validation comments
+    parts = []
     if translated_sub:
-        update_fields["submission_comment"] = build_translated_content(
-            sub_comment, translated_sub, config.translation.prefix
+        parts.append(
+            f"[Approval Request Translation]\n"
+            f"{build_translated_content(sub_comment, translated_sub, config.translation.prefix)}"
         )
     if translated_app:
-        update_fields["approval_comment"] = build_translated_content(
-            app_comment, translated_app, config.translation.prefix
+        parts.append(
+            f"[Approval Answer Translation]\n"
+            f"{build_translated_content(app_comment, translated_app, config.translation.prefix)}"
         )
+    followup_content = "\n\n".join(parts)
 
     try:
-        glpi.update_validation(ticket_id, validation_id, **update_fields)
-        logger.info("Validation %d translated and updated successfully", validation_id)
-        new_combined = f"{update_fields.get('submission_comment', sub_comment)}\n{update_fields.get('approval_comment', app_comment)}"
-        state.mark_validation_processed(validation_id, new_combined)
+        glpi.create_followup(ticket_id, followup_content)
+        logger.info("Validation %d translation posted as followup on ticket %d", validation_id, ticket_id)
+        state.mark_validation_processed(validation_id, combined)
         state.save()
         return True
     except Exception as e:
-        logger.error("Failed to update validation %d: %s", validation_id, e)
+        logger.error("Failed to post validation %d translation: %s", validation_id, e)
         return False
 
 
