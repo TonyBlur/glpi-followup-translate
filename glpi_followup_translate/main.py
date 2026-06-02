@@ -377,11 +377,12 @@ def extract_outer_tag(html: str) -> str:
 def build_translated_content(original: str, translated: str, prefix: str) -> str:
     """Build content preserving original and adding translation.
 
-    For HTML content: wraps [AUTO-TRANSLATED] in <strong> for bold formatting.
+    For HTML content: wraps [AUTO-TRANSLATED] in <strong> for bold formatting,
+    with <br> line break after the marker.
     For plain text: uses plain marker with \\n separators.
     """
     if has_html_tags(original):
-        return f"{original}\n\n<strong>{prefix}</strong>\n{translated}"
+        return f"{original}\n\n<strong>{prefix}</strong><br>\n{translated}"
     else:
         return f"{original}\n\n{prefix}\n{translated}"
 
@@ -458,6 +459,18 @@ def process_text(
     translated_plain = strip_html(translated)
     if translated_plain == plain_text:
         logger.warning("Translation for %s %d produced identical text, model may have failed", item_type, item_id)
+        return None
+
+    # Validate: ensure the translated text is actually in the target language,
+    # not just a rephrasing in the source language (model failure mode).
+    detected_lang = detect_language_with_fallback(
+        translated_plain, set(config.translation.source_languages)
+    )
+    if detected_lang == source_lang:
+        logger.warning(
+            "Translation for %s %d stayed in source language %s, model may have failed",
+            item_type, item_id, source_lang,
+        )
         return None
 
     return translated
