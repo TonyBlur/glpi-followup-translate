@@ -368,9 +368,13 @@ def extract_outer_tag(html: str) -> str:
 def build_translated_content(original: str, translated: str, prefix: str) -> str:
     """Build content preserving original and adding translation.
 
-    Uses literal \\n for cross-platform line breaks in all cases.
+    For HTML content: wraps [AUTO-TRANSLATED] in <strong> for bold formatting.
+    For plain text: uses plain marker with \\n separators.
     """
-    return f"{original}\n\n{prefix}\n{translated}"
+    if has_html_tags(original):
+        return f"{original}\n\n<strong>{prefix}</strong>\n{translated}"
+    else:
+        return f"{original}\n\n{prefix}\n{translated}"
 
 
 def build_translated_title(original: str, translated: str) -> str:
