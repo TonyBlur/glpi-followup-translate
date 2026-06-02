@@ -1,15 +1,25 @@
 # CLAUDE.md - GLPI Followup Translate
 
 ## Project Overview
-Auto-translate GLPI ticket names, descriptions, and followups using local Ollama LLM.
-Polls GLPI API v2.3, detects language (Chinese/English), translates via Ollama,
-and appends the translation. Rich text (HTML) formatting is preserved.
+Auto-translate GLPI ticket names, descriptions, followups, tasks, solutions, and
+validations using local Ollama LLM. Polls GLPI API v2.3, detects language
+(Chinese/English), translates via Ollama, and appends the translation. Rich text
+(HTML) formatting is preserved.
 
 ## Architecture
 - **config.py**: YAML config loader with dataclasses
-- **glpi_client.py**: GLPI API v2.3 client (OAuth2 Password, ticket/followup CRUD)
+- **glpi_client.py**: GLPI API v2.3 client (OAuth2 Password, full ticket timeline CRUD)
 - **ollama_client.py**: Ollama API client (POST /api/generate) with HTML-preserve mode
 - **main.py**: Daemon loop, language detection, state tracking, HTML-aware translation
+
+## Translation Targets
+All text fields on a ticket timeline:
+- **Ticket**: `name` (title), `content` (description)
+- **Followup**: `content`
+- **Task**: `content`
+- **Solution**: `content`
+- **Validation**: `submission_comment`, `approval_comment`
+- **Document**: skipped (no writable text content via API)
 
 ## Translation Formats
 - **Title**: `original / translated` (slash-separated, no prefix marker)

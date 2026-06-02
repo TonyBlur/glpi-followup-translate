@@ -46,6 +46,11 @@ def setup_logging(config: AppConfig) -> None:
     log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
     log_file = config.logging.file
 
+    # Fix Windows console encoding for non-ASCII characters
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -78,6 +83,12 @@ class ProcessedState:
         self.processed_followups: dict[int, str] = {}
         # Maps ticket_id -> (name_hash, content_hash)
         self.processed_tickets: dict[int, tuple[str, str]] = {}
+        # Maps task_id -> content hash
+        self.processed_tasks: dict[int, str] = {}
+        # Maps solution_id -> content hash
+        self.processed_solutions: dict[int, str] = {}
+        # Maps validation_id -> content hash
+        self.processed_validations: dict[int, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -109,10 +120,23 @@ class ProcessedState:
                                 self.processed_tickets[int(k)] = (str(v[0]), str(v[1]))
                             else:
                                 self.processed_tickets[int(k)] = ("", "")
+                    # Load tasks, solutions, validations (new in 0.1.1)
+                    self.processed_tasks = {
+                        int(k): str(v) for k, v in data.get("tasks", {}).items()
+                    }
+                    self.processed_solutions = {
+                        int(k): str(v) for k, v in data.get("solutions", {}).items()
+                    }
+                    self.processed_validations = {
+                        int(k): str(v) for k, v in data.get("validations", {}).items()
+                    }
                 logger.info(
-                    "Loaded state: %d followups, %d tickets",
+                    "Loaded state: %d followups, %d tickets, %d tasks, %d solutions, %d validations",
                     len(self.processed_followups),
                     len(self.processed_tickets),
+                    len(self.processed_tasks),
+                    len(self.processed_solutions),
+                    len(self.processed_validations),
                 )
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning("Failed to load state file, starting fresh: %s", e)
@@ -128,6 +152,9 @@ class ProcessedState:
                             str(k): [v[0], v[1]]
                             for k, v in self.processed_tickets.items()
                         },
+                        "tasks": {str(k): v for k, v in self.processed_tasks.items()},
+                        "solutions": {str(k): v for k, v in self.processed_solutions.items()},
+                        "validations": {str(k): v for k, v in self.processed_validations.items()},
                     },
                     f,
                 )
@@ -167,6 +194,36 @@ class ProcessedState:
             self._content_hash(content),
         )
 
+    def is_task_processed(self, task_id: int, content: str) -> bool:
+        """Check if a task has been processed with the same content."""
+        if task_id not in self.processed_tasks:
+            return False
+        return self.processed_tasks[task_id] == self._content_hash(content)
+
+    def mark_task_processed(self, task_id: int, content: str) -> None:
+        """Mark a task as processed with its current content."""
+        self.processed_tasks[task_id] = self._content_hash(content)
+
+    def is_solution_processed(self, solution_id: int, content: str) -> bool:
+        """Check if a solution has been processed with the same content."""
+        if solution_id not in self.processed_solutions:
+            return False
+        return self.processed_solutions[solution_id] == self._content_hash(content)
+
+    def mark_solution_processed(self, solution_id: int, content: str) -> None:
+        """Mark a solution as processed with its current content."""
+        self.processed_solutions[solution_id] = self._content_hash(content)
+
+    def is_validation_processed(self, validation_id: int, content: str) -> bool:
+        """Check if a validation has been processed with the same content."""
+        if validation_id not in self.processed_validations:
+            return False
+        return self.processed_validations[validation_id] == self._content_hash(content)
+
+    def mark_validation_processed(self, validation_id: int, content: str) -> None:
+        """Mark a validation as processed with its current content."""
+        self.processed_validations[validation_id] = self._content_hash(content)
+
     def cleanup_followups(self, valid_ids: Set[int]) -> None:
         """Remove followup IDs that no longer exist."""
         before = len(self.processed_followups)
@@ -186,6 +243,36 @@ class ProcessedState:
         removed = before - len(self.processed_tickets)
         if removed:
             logger.info("Cleaned up %d stale ticket entries", removed)
+
+    def cleanup_tasks(self, valid_ids: Set[int]) -> None:
+        """Remove task IDs that no longer exist."""
+        before = len(self.processed_tasks)
+        self.processed_tasks = {
+            k: v for k, v in self.processed_tasks.items() if k in valid_ids
+        }
+        removed = before - len(self.processed_tasks)
+        if removed:
+            logger.info("Cleaned up %d stale task entries", removed)
+
+    def cleanup_solutions(self, valid_ids: Set[int]) -> None:
+        """Remove solution IDs that no longer exist."""
+        before = len(self.processed_solutions)
+        self.processed_solutions = {
+            k: v for k, v in self.processed_solutions.items() if k in valid_ids
+        }
+        removed = before - len(self.processed_solutions)
+        if removed:
+            logger.info("Cleaned up %d stale solution entries", removed)
+
+    def cleanup_validations(self, valid_ids: Set[int]) -> None:
+        """Remove validation IDs that no longer exist."""
+        before = len(self.processed_validations)
+        self.processed_validations = {
+            k: v for k, v in self.processed_validations.items() if k in valid_ids
+        }
+        removed = before - len(self.processed_validations)
+        if removed:
+            logger.info("Cleaned up %d stale validation entries", removed)
 
 
 def detect_language(text: str) -> str:
@@ -385,6 +472,159 @@ def process_followup(
         return False
 
 
+def process_task(
+    task: dict,
+    ticket_id: int,
+    config: AppConfig,
+    glpi: GlpiClient,
+    ollama: OllamaClient,
+    state: ProcessedState,
+) -> bool:
+    """Process a single task for translation.
+
+    Returns:
+        True if translation was performed
+    """
+    task_id = task.get("id")
+    content = task.get("content", "").strip()
+
+    if not task_id:
+        return False
+
+    if state.is_task_processed(task_id, content):
+        return False
+
+    if is_already_translated(content, config.translation.prefix):
+        state.mark_task_processed(task_id, content)
+        return False
+
+    translated = process_text(content, task_id, "task", config, ollama)
+    if not translated:
+        state.mark_task_processed(task_id, content)
+        return False
+
+    new_content = build_translated_content(content, translated, config.translation.prefix)
+
+    try:
+        glpi.update_task(ticket_id, task_id, new_content)
+        logger.info("Task %d translated and updated successfully", task_id)
+        state.mark_task_processed(task_id, new_content)
+        state.save()
+        return True
+    except Exception as e:
+        logger.error("Failed to update task %d: %s", task_id, e)
+        return False
+
+
+def process_solution(
+    solution: dict,
+    ticket_id: int,
+    config: AppConfig,
+    glpi: GlpiClient,
+    ollama: OllamaClient,
+    state: ProcessedState,
+) -> bool:
+    """Process a single solution for translation.
+
+    Returns:
+        True if translation was performed
+    """
+    solution_id = solution.get("id")
+    content = solution.get("content", "").strip()
+
+    if not solution_id:
+        return False
+
+    if state.is_solution_processed(solution_id, content):
+        return False
+
+    if is_already_translated(content, config.translation.prefix):
+        state.mark_solution_processed(solution_id, content)
+        return False
+
+    translated = process_text(content, solution_id, "solution", config, ollama)
+    if not translated:
+        state.mark_solution_processed(solution_id, content)
+        return False
+
+    new_content = build_translated_content(content, translated, config.translation.prefix)
+
+    try:
+        glpi.update_solution(ticket_id, solution_id, new_content)
+        logger.info("Solution %d translated and updated successfully", solution_id)
+        state.mark_solution_processed(solution_id, new_content)
+        state.save()
+        return True
+    except Exception as e:
+        logger.error("Failed to update solution %d: %s", solution_id, e)
+        return False
+
+
+def process_validation(
+    validation: dict,
+    ticket_id: int,
+    config: AppConfig,
+    glpi: GlpiClient,
+    ollama: OllamaClient,
+    state: ProcessedState,
+) -> bool:
+    """Process a single validation for translation.
+
+    Translates both submission_comment and approval_comment if present.
+
+    Returns:
+        True if any translation was performed
+    """
+    validation_id = validation.get("id")
+    if not validation_id:
+        return False
+
+    # Combine both comment fields for state tracking
+    sub_comment = validation.get("submission_comment", "").strip()
+    app_comment = validation.get("approval_comment", "").strip()
+    combined = f"{sub_comment}\n{app_comment}"
+
+    if state.is_validation_processed(validation_id, combined):
+        return False
+
+    translated_sub = None
+    translated_app = None
+
+    # Translate submission_comment
+    if sub_comment and not is_already_translated(sub_comment, config.translation.prefix):
+        translated_sub = process_text(sub_comment, validation_id, "validation_submission", config, ollama)
+
+    # Translate approval_comment
+    if app_comment and not is_already_translated(app_comment, config.translation.prefix):
+        translated_app = process_text(app_comment, validation_id, "validation_approval", config, ollama)
+
+    if not translated_sub and not translated_app:
+        state.mark_validation_processed(validation_id, combined)
+        return False
+
+    # Build update fields
+    update_fields = {}
+    if translated_sub:
+        update_fields["submission_comment"] = build_translated_content(
+            sub_comment, translated_sub, config.translation.prefix
+        )
+    if translated_app:
+        update_fields["approval_comment"] = build_translated_content(
+            app_comment, translated_app, config.translation.prefix
+        )
+
+    try:
+        glpi.update_validation(ticket_id, validation_id, **update_fields)
+        logger.info("Validation %d translated and updated successfully", validation_id)
+        new_combined = f"{update_fields.get('submission_comment', sub_comment)}\n{update_fields.get('approval_comment', app_comment)}"
+        state.mark_validation_processed(validation_id, new_combined)
+        state.save()
+        return True
+    except Exception as e:
+        logger.error("Failed to update validation %d: %s", validation_id, e)
+        return False
+
+
 def process_ticket(
     ticket: dict,
     config: AppConfig,
@@ -465,6 +705,12 @@ def run_once(
         "tickets_skipped": 0,
         "followups_translated": 0,
         "followups_skipped": 0,
+        "tasks_translated": 0,
+        "tasks_skipped": 0,
+        "solutions_translated": 0,
+        "solutions_skipped": 0,
+        "validations_translated": 0,
+        "validations_skipped": 0,
         "failed": 0,
         "tickets_checked": 0,
     }
@@ -499,7 +745,7 @@ def run_once(
             followups = glpi.get_ticket_followups(ticket_id)
         except Exception as e:
             logger.warning("Failed to fetch followups for ticket %d: %s", ticket_id, e)
-            continue
+            followups = []
 
         for followup in followups:
             followup_id = followup.get("id", 0)
@@ -509,9 +755,60 @@ def run_once(
             elif followup_id and state.is_followup_processed(followup_id, followup.get("content", "")):
                 stats["followups_skipped"] += 1
 
+        # Process tasks
+        try:
+            tasks = glpi.get_ticket_tasks(ticket_id)
+        except Exception as e:
+            logger.warning("Failed to fetch tasks for ticket %d: %s", ticket_id, e)
+            tasks = []
+
+        for task in tasks:
+            task_id = task.get("id", 0)
+            result = process_task(task, ticket_id, config, glpi, ollama, state)
+            if result:
+                stats["tasks_translated"] += 1
+            elif task_id and state.is_task_processed(task_id, task.get("content", "")):
+                stats["tasks_skipped"] += 1
+
+        # Process solutions
+        try:
+            solutions = glpi.get_ticket_solutions(ticket_id)
+        except Exception as e:
+            logger.warning("Failed to fetch solutions for ticket %d: %s", ticket_id, e)
+            solutions = []
+
+        for solution in solutions:
+            solution_id = solution.get("id", 0)
+            result = process_solution(solution, ticket_id, config, glpi, ollama, state)
+            if result:
+                stats["solutions_translated"] += 1
+            elif solution_id and state.is_solution_processed(solution_id, solution.get("content", "")):
+                stats["solutions_skipped"] += 1
+
+        # Process validations
+        try:
+            validations = glpi.get_ticket_validations(ticket_id)
+        except Exception as e:
+            logger.warning("Failed to fetch validations for ticket %d: %s", ticket_id, e)
+            validations = []
+
+        for validation in validations:
+            validation_id = validation.get("id", 0)
+            result = process_validation(validation, ticket_id, config, glpi, ollama, state)
+            if result:
+                stats["validations_translated"] += 1
+            elif validation_id:
+                sub = validation.get("submission_comment", "").strip()
+                app = validation.get("approval_comment", "").strip()
+                if state.is_validation_processed(validation_id, f"{sub}\n{app}"):
+                    stats["validations_skipped"] += 1
+
     # Periodic cleanup
     all_followup_ids: Set[int] = set()
     all_ticket_ids: Set[int] = set()
+    all_task_ids: Set[int] = set()
+    all_solution_ids: Set[int] = set()
+    all_validation_ids: Set[int] = set()
     for ticket in tickets:
         ticket_id = ticket.get("id")
         if ticket_id:
@@ -522,8 +819,29 @@ def run_once(
                         all_followup_ids.add(fu["id"])
             except Exception:
                 pass
+            try:
+                for t in glpi.get_ticket_tasks(ticket_id):
+                    if t.get("id"):
+                        all_task_ids.add(t["id"])
+            except Exception:
+                pass
+            try:
+                for s in glpi.get_ticket_solutions(ticket_id):
+                    if s.get("id"):
+                        all_solution_ids.add(s["id"])
+            except Exception:
+                pass
+            try:
+                for v in glpi.get_ticket_validations(ticket_id):
+                    if v.get("id"):
+                        all_validation_ids.add(v["id"])
+            except Exception:
+                pass
     state.cleanup_followups(all_followup_ids)
     state.cleanup_tickets(all_ticket_ids)
+    state.cleanup_tasks(all_task_ids)
+    state.cleanup_solutions(all_solution_ids)
+    state.cleanup_validations(all_validation_ids)
     state.save()
 
     return stats
@@ -554,12 +872,24 @@ def daemon_loop(config: AppConfig) -> None:
         try:
             stats = run_once(config, glpi, ollama, state)
             logger.info(
-                "Pass complete: %d tickets checked | Tickets: %d translated, %d skipped | Followups: %d translated, %d skipped | %d failed",
+                "Pass complete: %d tickets checked | "
+                "Tickets: %d translated, %d skipped | "
+                "Followups: %d translated, %d skipped | "
+                "Tasks: %d translated, %d skipped | "
+                "Solutions: %d translated, %d skipped | "
+                "Validations: %d translated, %d skipped | "
+                "%d failed",
                 stats["tickets_checked"],
                 stats["tickets_translated"],
                 stats["tickets_skipped"],
                 stats["followups_translated"],
                 stats["followups_skipped"],
+                stats["tasks_translated"],
+                stats["tasks_skipped"],
+                stats["solutions_translated"],
+                stats["solutions_skipped"],
+                stats["validations_translated"],
+                stats["validations_skipped"],
                 stats["failed"],
             )
         except Exception as e:
@@ -607,9 +937,12 @@ def main():
         state = ProcessedState()
         stats = run_once(config, glpi, ollama, state)
         logger.info(
-            "Single pass: %d tickets translated, %d followups translated",
+            "Single pass: %d tickets, %d followups, %d tasks, %d solutions, %d validations translated",
             stats["tickets_translated"],
             stats["followups_translated"],
+            stats["tasks_translated"],
+            stats["solutions_translated"],
+            stats["validations_translated"],
         )
     else:
         daemon_loop(config)

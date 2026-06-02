@@ -234,6 +234,10 @@ class GlpiClient:
         """
         return self._request("PATCH", f"/Assistance/Ticket/{ticket_id}", json_data=fields)
 
+    # -----------------------------------------------------------------------
+    # Followups
+    # -----------------------------------------------------------------------
+
     def get_ticket_followups(self, ticket_id: int) -> List[Dict]:
         """Fetch all followups for a specific ticket.
 
@@ -292,4 +296,129 @@ class GlpiClient:
             "PATCH",
             f"/Assistance/Ticket/{ticket_id}/Timeline/Followup/{followup_id}",
             json_data=payload,
+        )
+
+    # -----------------------------------------------------------------------
+    # Tasks
+    # -----------------------------------------------------------------------
+
+    def get_ticket_tasks(self, ticket_id: int) -> List[Dict]:
+        """Fetch all tasks for a specific ticket.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+
+        Returns:
+            List of task dictionaries
+        """
+        result = self._request("GET", f"/Assistance/Ticket/{ticket_id}/Timeline/Task")
+        if isinstance(result, list):
+            tasks = []
+            for item in result:
+                if isinstance(item, dict) and "item" in item:
+                    tasks.append(item["item"])
+                elif isinstance(item, dict) and "id" in item:
+                    tasks.append(item)
+            return tasks
+        return []
+
+    def update_task(self, ticket_id: int, task_id: int, content: str) -> Dict:
+        """Update a task's content.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+            task_id: The GLPI task ID
+            content: New content for the task
+
+        Returns:
+            Updated task data
+        """
+        payload = {"content": content}
+        return self._request(
+            "PATCH",
+            f"/Assistance/Ticket/{ticket_id}/Timeline/Task/{task_id}",
+            json_data=payload,
+        )
+
+    # -----------------------------------------------------------------------
+    # Solutions
+    # -----------------------------------------------------------------------
+
+    def get_ticket_solutions(self, ticket_id: int) -> List[Dict]:
+        """Fetch all solutions for a specific ticket.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+
+        Returns:
+            List of solution dictionaries
+        """
+        result = self._request("GET", f"/Assistance/Ticket/{ticket_id}/Timeline/Solution")
+        if isinstance(result, list):
+            solutions = []
+            for item in result:
+                if isinstance(item, dict) and "item" in item:
+                    solutions.append(item["item"])
+                elif isinstance(item, dict) and "id" in item:
+                    solutions.append(item)
+            return solutions
+        return []
+
+    def update_solution(self, ticket_id: int, solution_id: int, content: str) -> Dict:
+        """Update a solution's content.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+            solution_id: The GLPI solution ID
+            content: New content for the solution
+
+        Returns:
+            Updated solution data
+        """
+        payload = {"content": content}
+        return self._request(
+            "PATCH",
+            f"/Assistance/Ticket/{ticket_id}/Timeline/Solution/{solution_id}",
+            json_data=payload,
+        )
+
+    # -----------------------------------------------------------------------
+    # Validations
+    # -----------------------------------------------------------------------
+
+    def get_ticket_validations(self, ticket_id: int) -> List[Dict]:
+        """Fetch all validations for a specific ticket.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+
+        Returns:
+            List of validation dictionaries
+        """
+        result = self._request("GET", f"/Assistance/Ticket/{ticket_id}/Timeline/Validation")
+        if isinstance(result, list):
+            validations = []
+            for item in result:
+                if isinstance(item, dict) and "item" in item:
+                    validations.append(item["item"])
+                elif isinstance(item, dict) and "id" in item:
+                    validations.append(item)
+            return validations
+        return []
+
+    def update_validation(self, ticket_id: int, validation_id: int, **fields) -> Dict:
+        """Update a validation's fields.
+
+        Args:
+            ticket_id: The GLPI ticket ID
+            validation_id: The GLPI validation ID
+            **fields: Fields to update (e.g., submission_comment, approval_comment)
+
+        Returns:
+            Updated validation data
+        """
+        return self._request(
+            "PATCH",
+            f"/Assistance/Ticket/{ticket_id}/Timeline/Validation/{validation_id}",
+            json_data=fields,
         )
