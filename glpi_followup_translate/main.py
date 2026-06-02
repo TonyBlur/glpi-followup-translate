@@ -439,17 +439,23 @@ def process_text(
         )
         return None
 
-    # Translate: pass original text with HTML — the model handles tags naturally
-    # without a special preserve_html prompt (which can cause copy-failures).
+    # Translate plain text (strip HTML to reduce tokens and avoid timeouts
+    # on heavily-styled content). The original HTML is preserved in storage.
+    if len(plain_text) > 5000:
+        logger.warning(
+            "%s %d: text too long (%d chars), skipping", item_type, item_id, len(plain_text)
+        )
+        return None
+
     logger.info(
         "Translating %s %d (%s -> %s): %s...",
         item_type,
         item_id,
         source_lang,
         target_lang,
-        text[:80],
+        plain_text[:80],
     )
-    translated = ollama.translate(text, source_lang, target_lang)
+    translated = ollama.translate(plain_text, source_lang, target_lang)
     if not translated:
         logger.warning("Translation failed for %s %d", item_type, item_id)
         return None

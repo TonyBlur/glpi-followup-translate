@@ -79,6 +79,8 @@ class OllamaClient:
             logger.debug(
                 "Translating %d chars: %s -> %s", len(text), source_lang, target_lang
             )
+            # Dynamic timeout: at least config value, more for longer text
+            dynamic_timeout = max(self.timeout, len(text) / 20)
             resp = self.session.post(
                 f"{self.api_url}/api/generate",
                 json={
@@ -90,7 +92,7 @@ class OllamaClient:
                         "repeat_penalty": 1.2,
                     },
                 },
-                timeout=self.timeout,
+                timeout=dynamic_timeout,
             )
             resp.raise_for_status()
             result = resp.json()
@@ -105,9 +107,8 @@ class OllamaClient:
 
         except requests.Timeout:
             logger.error(
-                "Ollama translation timed out after %ds for %d chars",
-                self.timeout,
-                len(text),
+                "Ollama translation timed out after %.0fs for %d chars",
+                dynamic_timeout, len(text),
             )
             return None
         except requests.RequestException as e:
