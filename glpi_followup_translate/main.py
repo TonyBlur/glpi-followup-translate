@@ -714,9 +714,8 @@ def process_ticket(
     if content and not is_already_translated(content, config.translation.prefix):
         translated_content = process_text(content, ticket_id, "ticket_content", config, ollama)
 
-    # If nothing to translate, mark current state and skip
+    # If nothing to translate, skip without marking — retry next pass
     if not translated_name and not translated_content:
-        state.mark_ticket_processed(ticket_id, name, content)
         return False
 
     # Build update fields
