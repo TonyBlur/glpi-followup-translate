@@ -11,7 +11,7 @@ Works with ticket **names**, **descriptions**, and **followups**.
 - 🔄 **Daemon or one-shot** — polling loop or single-pass mode
 - 🌐 **Language detection** — auto-detects Chinese and English
 - 🔀 **Bidirectional** — zh-cn → en, en → zh-cn
-- 📝 **Preserves original** — translation is appended, never overwritten
+- 📝 **Preserves original** — translation appended, never overwritten
 - 🎨 **Rich-text aware** — HTML formatting (`<strong>`, `<em>`, `<span style="...">`, colors, font sizes) is preserved in translations
 - 🚫 **Dedup** — content-hash state tracking prevents duplicate translations
 - ⚙️ **Configurable** — polling interval, model, language pairs, min text length
@@ -60,31 +60,47 @@ Checked the firewall rules and found that port 3306 was accidentally closed.
 
 ## Quick Start
 
+### Option A: pip install (recommended)
+
+```bash
+# 1. Install from GitHub
+pip install git+https://github.com/TonyBlur/glpi-followup-translate.git
+
+# 2. Pull the translation model
+ollama pull kaelri/hy-mt2:1.8b
+
+# 3. Create config in current directory
+curl -O https://raw.githubusercontent.com/TonyBlur/glpi-followup-translate/main/config.yaml.example
+cp config.yaml.example config.yaml
+# Edit config.yaml with your GLPI credentials
+
+# 4. Run
+glpi-followup-translate              # daemon mode
+glpi-followup-translate --once      # single pass
+glpi-followup-translate -c /path/to/config.yaml  # custom config path
+```
+
+### Option B: Development / source install
+
 ```bash
 # 1. Clone
 git clone https://github.com/TonyBlur/glpi-followup-translate.git
 cd glpi-followup-translate
 
-# 2. Virtual environment
-python -m venv .venv
-source .venv/bin/activate      # Linux/macOS
-.venv\Scripts\activate         # Windows
+# 2. Editable install
+pip install -e .
 
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Pull the translation model
+# 3. Pull the translation model
 ollama pull kaelri/hy-mt2:1.8b
 
-# 5. Configure
+# 4. Configure
 cp config.yaml.example config.yaml
 # Edit config.yaml with your GLPI credentials
 
-# 6. Run (daemon mode)
-python -m glpi_followup_translate
-
-# Or run once and exit
-python -m glpi_followup_translate --once
+# 5. Run
+glpi-followup-translate                 # CLI command
+python -m glpi_followup_translate       # or via python module
+glpi-followup-translate --once          # single pass
 ```
 
 ## Configuration
@@ -192,7 +208,7 @@ glpi-followup-translate/
 │   ├── main.py             # daemon loop, translation logic
 │   └── ollama_client.py    # Ollama API client
 ├── config.yaml.example     # config template (safe to commit)
-├── config.yaml             # actual config (gitignored)
+├── pyproject.toml          # pip package configuration
 ├── requirements.txt
 ├── test_single_ticket.py   # quick single-ticket test
 ├── test_translate.py       # multi-ticket test suite

@@ -58,17 +58,40 @@ Checked the firewall rules and found that port 3306 was accidentally closed.
 
 ## 快速开始
 
+### 方式 A：pip 安装（推荐）
+
+```bash
+# 1. 从 GitHub 安装
+pip install git+https://github.com/TonyBlur/glpi-followup-translate.git
+
+# 2. 拉取翻译模型
+ollama pull kaelri/hy-mt2:1.8b
+
+# 3. 在当前目录创建配置
+curl -O https://raw.githubusercontent.com/TonyBlur/glpi-followup-translate/main/config.yaml.example
+cp config.yaml.example config.yaml
+# 编辑 config.yaml，填入你的 GLPI 凭证
+
+# 4. 运行
+glpi-followup-translate              # 守护进程模式
+glpi-followup-translate --once      # 单次执行
+glpi-followup-translate -c /path/to/config.yaml  # 指定配置文件
+```
+
+### 方式 B：开发 / 源码安装
+
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/TonyBlur/glpi-followup-translate.git
 cd glpi-followup-translate
 
-# 2. 创建虚拟环境
+# 2. 可编辑安装
+pip install -e .
+
+# 3. 虚拟环境（替代方案）
 python -m venv .venv
 source .venv/bin/activate      # Linux/macOS
 .venv\Scripts\activate         # Windows
-
-# 3. 安装依赖
 pip install -r requirements.txt
 
 # 4. 拉取翻译模型
@@ -78,11 +101,10 @@ ollama pull kaelri/hy-mt2:1.8b
 cp config.yaml.example config.yaml
 # 编辑 config.yaml，填入你的 GLPI 凭证
 
-# 6. 运行（守护进程模式）
-python -m glpi_followup_translate
-
-# 或单次执行
-python -m glpi_followup_translate --once
+# 6. 运行
+glpi-followup-translate                 # CLI 命令
+python -m glpi_followup_translate       # 或通过 python 模块
+glpi-followup-translate --once          # 单次执行
 ```
 
 ## 配置说明
@@ -188,7 +210,7 @@ glpi-followup-translate/
 │   ├── main.py             # 守护进程循环、翻译逻辑
 │   └── ollama_client.py    # Ollama API 客户端
 ├── config.yaml.example     # 配置模板（可安全提交）
-├── config.yaml             # 实际配置（已 gitignore）
+├── pyproject.toml          # pip 包配置
 ├── requirements.txt
 ├── test_single_ticket.py   # 单工单快速测试
 ├── test_translate.py       # 多工单测试套件

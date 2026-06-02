@@ -63,11 +63,16 @@ def load_config(config_path: str = None) -> AppConfig:
         AppConfig instance with all settings loaded.
     """
     if config_path is None:
-        # Default to config.yaml in the project root
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config.yaml",
-        )
+        # Priority 1: config.yaml in current working directory (pip-installed usage)
+        cwd_path = os.path.join(os.getcwd(), "config.yaml")
+        if os.path.exists(cwd_path):
+            config_path = cwd_path
+        else:
+            # Priority 2: config.yaml in project root (dev mode: python -m glpi_followup_translate)
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config.yaml",
+            )
 
     if not os.path.exists(config_path):
         raise FileNotFoundError(

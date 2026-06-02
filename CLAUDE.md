@@ -24,9 +24,19 @@ and appends the translation. Rich text (HTML) formatting is preserved.
 
 ## Commands
 ```bash
-pip install -r requirements.txt
+# Editable install
+pip install -e .
+
+# CLI (after pip install)
+glpi-followup-translate                  # daemon mode
+glpi-followup-translate --once           # single pass
+glpi-followup-translate -c config.yaml   # custom config path
+
+# Dev / module
 python -m glpi_followup_translate          # daemon mode
 python -m glpi_followup_translate --once   # single pass
+
+# Tests
 python test_single_ticket.py               # single-ticket integration test
 python test_translate.py                   # multi-ticket test suite
 ```
@@ -34,7 +44,10 @@ python test_translate.py                   # multi-ticket test suite
 ## Config
 - `config.yaml` is gitignored (contains secrets)
 - `config.yaml.example` is the template
-- Config is loaded from project root by default
+- Config search order (when no `-c` given):
+  1. `./config.yaml` in current working directory
+  2. `<project_root>/config.yaml` (dev mode fallback)
+- `--config` / `-c` CLI flag overrides all defaults
 
 ## State
 - `processed_state.json` tracks translated IDs with content hashes

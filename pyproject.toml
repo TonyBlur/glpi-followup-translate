@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glpi-followup-translate"
+version = "1.0.0"
+description = "Auto-translate GLPI ticket followups using local Ollama LLM"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "TonyBlur" }
+]
+keywords = ["glpi", "translation", "ollama", "llm", "followup"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "requests>=2.31.0",
+    "langdetect>=1.0.9",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+glpi-followup-translate = "glpi_followup_translate.main:main"
+
+[project.urls]
+Homepage = "https://github.com/TonyBlur/glpi-followup-translate"
+Repository = "https://github.com/TonyBlur/glpi-followup-translate"
+
+[tool.setuptools.packages.find]
+include = ["glpi_followup_translate*"]
