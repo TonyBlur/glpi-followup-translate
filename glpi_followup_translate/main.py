@@ -31,6 +31,27 @@ def strip_html(text: str) -> str:
     text = text.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
     return text.strip()
 
+
+# Pattern to strip inline styles and verbose attributes from HTML tags
+_STYLE_RE = re.compile(r'\s*style\s*=\s*"[^"]*"', re.IGNORECASE)
+_CLASS_RE = re.compile(r'\s*class\s*=\s*"[^"]*"', re.IGNORECASE)
+_ID_RE = re.compile(r'\s*id\s*=\s*"[^"]*"', re.IGNORECASE)
+_DATA_RE = re.compile(r'\s*data-\w+\s*=\s*"[^"]*"', re.IGNORECASE)
+_CSSVAR_RE = re.compile(r'\s*--[\w-]+\s*:\s*[^;"]+;?', re.IGNORECASE)
+
+
+def strip_html_styles(html: str) -> str:
+    """Remove inline styles, classes, ids, and data attrs to reduce token count.
+
+    Keeps structural HTML tags (<p>, <strong>, <em>, <h3>, etc.) intact.
+    Only removes verbose attributes that bloat the text without adding meaning.
+    """
+    html = _STYLE_RE.sub('', html)
+    html = _CLASS_RE.sub('', html)
+    html = _ID_RE.sub('', html)
+    html = _DATA_RE.sub('', html)
+    return html
+
 # Graceful shutdown flag
 _shutdown = False
 
@@ -439,11 +460,13 @@ def process_text(
         )
         return None
 
-    # Translate plain text (strip HTML to reduce tokens and avoid timeouts
-    # on heavily-styled content). The original HTML is preserved in storage.
-    if len(plain_text) > 5000:
+    # Strip verbose HTML styles/classes to reduce tokens, but keep structural
+    # tags (<p>, <strong>, <em>, etc.) so the translation preserves formatting.
+    compact_text = strip_html_styles(text) if has_html_tags(text) else text
+
+    if len(compact_text) > 8000:
         logger.warning(
-            "%s %d: text too long (%d chars), skipping", item_type, item_id, len(plain_text)
+            "%s %d: text too long (%d chars), skipping", item_type, item_id, len(compact_text)
         )
         return None
 
@@ -455,7 +478,7 @@ def process_text(
         target_lang,
         plain_text[:80],
     )
-    translated = ollama.translate(plain_text, source_lang, target_lang)
+    translated = ollama.translate(compact_text, source_lang, target_lang)
     if not translated:
         logger.warning("Translation failed for %s %d", item_type, item_id)
         return None
