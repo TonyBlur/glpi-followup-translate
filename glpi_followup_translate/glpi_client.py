@@ -405,20 +405,3 @@ class GlpiClient:
                     validations.append(item)
             return validations
         return []
-
-    def update_validation(self, ticket_id: int, validation_id: int, **fields) -> Dict:
-        """Update a validation's fields.
-
-        Args:
-            ticket_id: The GLPI ticket ID
-            validation_id: The GLPI validation ID
-            **fields: Fields to update (e.g., submission_comment, approval_comment)
-
-        Returns:
-            Updated validation data
-        """
-        return self._request(
-            "PATCH",
-            f"/Assistance/Ticket/{ticket_id}/Timeline/Validation/{validation_id}",
-            json_data=fields,
-        )
