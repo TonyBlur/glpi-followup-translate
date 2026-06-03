@@ -212,6 +212,25 @@ This script cleans up old test tickets first, then:
 5. Run one translation pass with debug logging
 6. Display all translated results
 
+## Run 24/7 (Background Service)
+
+One command to install as a background service that survives terminal close and auto-restarts:
+
+```bash
+python install_service.py
+```
+
+| Platform | Service |
+|----------|---------|
+| Linux | systemd |
+| Windows | Task Scheduler |
+| macOS | launchd |
+
+Uninstall:
+```bash
+python install_service.py --remove
+```
+
 ## Project Structure
 
 ```

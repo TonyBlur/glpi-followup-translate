@@ -208,6 +208,25 @@ python test_translate.py
 5. 运行一次翻译（启用 DEBUG 日志）
 6. 展示所有翻译结果
 
+## 7x24 后台运行
+
+一键安装为后台服务，关闭终端后继续运行，崩溃自动重启：
+
+```bash
+python install_service.py
+```
+
+| 平台 | 服务 |
+|------|------|
+| Linux | systemd |
+| Windows | 任务计划程序 |
+| macOS | launchd |
+
+卸载：
+```bash
+python install_service.py --remove
+```
+
 ## 项目结构
 
 ```
