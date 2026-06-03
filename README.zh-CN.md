@@ -210,10 +210,11 @@ python test_translate.py
 
 ## 7x24 后台运行
 
-一键安装为后台服务，关闭终端后继续运行，崩溃自动重启：
+一条命令，自动适配系统：
 
 ```bash
-python install_service.py
+glpi-followup-translate --install-service     # 安装
+glpi-followup-translate --remove-service      # 卸载
 ```
 
 | 平台 | 服务 |
@@ -221,11 +222,6 @@ python install_service.py
 | Linux | systemd |
 | Windows | 任务计划程序 |
 | macOS | launchd |
-
-卸载：
-```bash
-python install_service.py --remove
-```
 
 ## 项目结构
 

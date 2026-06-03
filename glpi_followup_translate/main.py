@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 import time
 from typing import Set, Optional
@@ -1053,6 +1054,124 @@ def daemon_loop(config: AppConfig) -> None:
     logger.info("=== GLPI Followup Translate stopped ===")
 
 
+def _install_service(remove: bool = False) -> None:
+    """Install or remove as a background service (systemd / Task Scheduler / launchd)."""
+    import platform
+    import textwrap
+    import shutil
+
+    SYSTEM = platform.system()
+    SERVICE_NAME = "glpi-translate"
+    WORK_DIR = os.getcwd()
+    PYTHON = sys.executable
+
+    if SYSTEM == "Linux":
+        # Check root
+        if os.geteuid() != 0:
+            print("Error: Requires root. Run with sudo:")
+            print(f"  sudo {sys.executable} -m glpi_followup_translate --{'remove-' if remove else ''}install-service")
+            sys.exit(1)
+        unit = textwrap.dedent(f"""\
+            [Unit]
+            Description=GLPI Followup Translate
+            After=network-online.target
+
+            [Service]
+            Type=simple
+            WorkingDirectory={WORK_DIR}
+            ExecStart={PYTHON} -m glpi_followup_translate
+            Restart=always
+            RestartSec=10
+            StandardOutput=append:{WORK_DIR}/glpi-translate.log
+            StandardError=append:{WORK_DIR}/glpi-translate.log
+
+            [Install]
+            WantedBy=multi-user.target
+        """)
+        unit_path = f"/etc/systemd/system/{SERVICE_NAME}.service"
+        if remove:
+            subprocess.run(["systemctl", "stop", SERVICE_NAME], check=False)
+            subprocess.run(["systemctl", "disable", SERVICE_NAME], check=False)
+            os.remove(unit_path)
+            subprocess.run(["systemctl", "daemon-reload"], check=False)
+            print("Service removed.")
+        else:
+            with open(unit_path, "w") as f: f.write(unit)
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "enable", "--now", SERVICE_NAME], check=True)
+            print(f"Service installed. Check: systemctl status {SERVICE_NAME}")
+
+    elif SYSTEM == "Windows":
+        xml = textwrap.dedent(f"""\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task" version="1.4">
+              <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
+              <Principals><Principal id="A"><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+              <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+                <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+                <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+                <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+              </Settings>
+              <Actions Context="Author"><Exec>
+                <Command>{PYTHON}</Command>
+                <Arguments>-m glpi_followup_translate</Arguments>
+                <WorkingDirectory>{WORK_DIR}</WorkingDirectory>
+              </Exec></Actions>
+            </Task>
+        """)
+        xml_path = os.path.join(WORK_DIR, "deploy", "task.xml")
+        if remove:
+            subprocess.run(["schtasks", "/Delete", "/TN", SERVICE_NAME, "/F"], check=False)
+            shutil.rmtree(os.path.dirname(xml_path), ignore_errors=True)
+            print("Task removed.")
+        else:
+            os.makedirs(os.path.dirname(xml_path), exist_ok=True)
+            with open(xml_path, "w") as f: f.write(xml)
+            try:
+                subprocess.run(["schtasks", "/Create", "/TN", SERVICE_NAME, "/XML", xml_path, "/F"],
+                              check=True, capture_output=True, text=True)
+                subprocess.run(["schtasks", "/Run", "/TN", SERVICE_NAME], check=True)
+                print(f"Task installed. Check: schtasks /Query /TN {SERVICE_NAME}")
+            except subprocess.CalledProcessError as e:
+                if "Access is denied" in (e.stderr or ""):
+                    print("Error: Requires Administrator. Run PowerShell as Administrator.")
+                    print(f"  glpi-followup-translate --{'remove-' if remove else ''}install-service")
+                else:
+                    print(f"Error: {e.stderr}")
+                sys.exit(1)
+
+    elif SYSTEM == "Darwin":
+        plist = textwrap.dedent(f"""\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+              "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict>
+              <key>Label</key><string>com.glpi.translate</string>
+              <key>ProgramArguments</key>
+              <array><string>{PYTHON}</string><string>-m</string><string>glpi_followup_translate</string></array>
+              <key>WorkingDirectory</key><string>{WORK_DIR}</string>
+              <key>RunAtLoad</key><true/>
+              <key>KeepAlive</key><true/>
+              <key>StandardOutPath</key><string>{WORK_DIR}/glpi-translate.log</string>
+              <key>StandardErrorPath</key><string>{WORK_DIR}/glpi-translate.log</string>
+            </dict></plist>
+        """)
+        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.glpi.translate.plist")
+        if remove:
+            subprocess.run(["launchctl", "unload", plist_path], check=False)
+            os.remove(plist_path)
+            print("Agent removed.")
+        else:
+            os.makedirs(os.path.dirname(plist_path), exist_ok=True)
+            with open(plist_path, "w") as f: f.write(plist)
+            subprocess.run(["launchctl", "load", plist_path], check=True)
+            print("Agent installed. Check: launchctl list | grep glpi")
+
+    else:
+        print(f"Unsupported OS: {SYSTEM}")
+        sys.exit(1)
+
+
 def main():
     """Entry point."""
     parser = argparse.ArgumentParser(
@@ -1061,14 +1180,31 @@ def main():
     parser.add_argument(
         "-c", "--config",
         default=None,
-        help="Path to config.yaml (default: auto-detect in project root)",
+        help="Path to config.yaml (default: auto-detect)",
     )
     parser.add_argument(
         "--once",
         action="store_true",
         help="Run once and exit (instead of daemon mode)",
     )
+    parser.add_argument(
+        "--install-service",
+        action="store_true",
+        help="Install as background service (systemd/Task Scheduler/launchd)",
+    )
+    parser.add_argument(
+        "--remove-service",
+        action="store_true",
+        help="Remove background service",
+    )
     args = parser.parse_args()
+
+    if args.install_service:
+        _install_service(remove=False)
+        return
+    if args.remove_service:
+        _install_service(remove=True)
+        return
 
     # Load config
     config = load_config(args.config)

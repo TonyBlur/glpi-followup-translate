@@ -214,10 +214,11 @@ This script cleans up old test tickets first, then:
 
 ## Run 24/7 (Background Service)
 
-One command to install as a background service that survives terminal close and auto-restarts:
+One command, auto-detects your OS:
 
 ```bash
-python install_service.py
+glpi-followup-translate --install-service     # install
+glpi-followup-translate --remove-service      # uninstall
 ```
 
 | Platform | Service |
@@ -225,11 +226,6 @@ python install_service.py
 | Linux | systemd |
 | Windows | Task Scheduler |
 | macOS | launchd |
-
-Uninstall:
-```bash
-python install_service.py --remove
-```
 
 ## Project Structure
 
